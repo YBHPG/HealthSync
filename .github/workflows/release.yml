@@ -109,8 +109,6 @@ jobs:
       - name: Package IPA
         working-directory: ./ios
         run: |
-          # Ad-hoc sign the app WITH entitlements so AltStore doesn't crash reading a missing entitlements block
-          codesign -s - --force --deep --entitlements HealthSync/HealthSync.entitlements build/Build/Products/Release-iphoneos/HealthSync.app
           mkdir Payload
           cp -r build/Build/Products/Release-iphoneos/HealthSync.app Payload/
           
