@@ -109,6 +109,8 @@ jobs:
       - name: Package IPA
         working-directory: ./ios
         run: |
+          # Ad-hoc sign the app so AltStore has a signature structure to replace
+          codesign -s - --force --deep build/Build/Products/Release-iphoneos/HealthSync.app
           mkdir Payload
           cp -r build/Build/Products/Release-iphoneos/HealthSync.app Payload/
           zip -r HealthSync-iOS-v${VERSION}.ipa Payload
