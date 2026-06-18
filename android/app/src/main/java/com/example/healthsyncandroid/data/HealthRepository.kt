@@ -19,12 +19,33 @@ import androidx.health.connect.client.records.ElevationGainedRecord
 import androidx.health.connect.client.records.BasalMetabolicRateRecord
 import androidx.health.connect.client.records.SpeedRecord
 import androidx.health.connect.client.records.StepsCadenceRecord
+import androidx.health.connect.client.records.BodyFatRecord
+import androidx.health.connect.client.records.LeanBodyMassRecord
+import androidx.health.connect.client.records.BoneMassRecord
+import androidx.health.connect.client.records.BodyTemperatureRecord
+import androidx.health.connect.client.records.BasalBodyTemperatureRecord
+import androidx.health.connect.client.records.BloodGlucoseRecord
+import androidx.health.connect.client.records.OxygenSaturationRecord
+import androidx.health.connect.client.records.BloodPressureRecord
+import androidx.health.connect.client.records.HydrationRecord
+import androidx.health.connect.client.records.NutritionRecord
+import androidx.health.connect.client.records.WheelchairPushesRecord
+import androidx.health.connect.client.records.MenstruationFlowRecord
+import androidx.health.connect.client.records.IntermenstrualBleedingRecord
+import androidx.health.connect.client.records.CervicalMucusRecord
+import androidx.health.connect.client.records.OvulationTestRecord
+import androidx.health.connect.client.records.SexualActivityRecord
 import androidx.health.connect.client.records.metadata.Metadata
 import androidx.health.connect.client.units.Length
 import androidx.health.connect.client.units.Mass
 import androidx.health.connect.client.units.Power
 import androidx.health.connect.client.units.Velocity
 import androidx.health.connect.client.units.Energy
+import androidx.health.connect.client.units.Percentage
+import androidx.health.connect.client.units.Temperature
+import androidx.health.connect.client.units.BloodGlucose
+import androidx.health.connect.client.units.Pressure
+import androidx.health.connect.client.units.Volume
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -57,7 +78,23 @@ class HealthRepository(private val context: Context) {
         HealthPermission.getWritePermission(ElevationGainedRecord::class),
         HealthPermission.getWritePermission(BasalMetabolicRateRecord::class),
         HealthPermission.getWritePermission(SpeedRecord::class),
-        HealthPermission.getWritePermission(StepsCadenceRecord::class)
+        HealthPermission.getWritePermission(StepsCadenceRecord::class),
+        HealthPermission.getWritePermission(BodyFatRecord::class),
+        HealthPermission.getWritePermission(LeanBodyMassRecord::class),
+        HealthPermission.getWritePermission(BoneMassRecord::class),
+        HealthPermission.getWritePermission(BodyTemperatureRecord::class),
+        HealthPermission.getWritePermission(BasalBodyTemperatureRecord::class),
+        HealthPermission.getWritePermission(BloodGlucoseRecord::class),
+        HealthPermission.getWritePermission(OxygenSaturationRecord::class),
+        HealthPermission.getWritePermission(BloodPressureRecord::class),
+        HealthPermission.getWritePermission(HydrationRecord::class),
+        HealthPermission.getWritePermission(NutritionRecord::class),
+        HealthPermission.getWritePermission(WheelchairPushesRecord::class),
+        HealthPermission.getWritePermission(MenstruationFlowRecord::class),
+        HealthPermission.getWritePermission(IntermenstrualBleedingRecord::class),
+        HealthPermission.getWritePermission(CervicalMucusRecord::class),
+        HealthPermission.getWritePermission(OvulationTestRecord::class),
+        HealthPermission.getWritePermission(SexualActivityRecord::class)
     )
 
     suspend fun checkPermissions(): Boolean {
@@ -74,7 +111,9 @@ class HealthRepository(private val context: Context) {
     suspend fun saveBulk(payload: BulkSyncPayload): Boolean {
         if (!_isSupported.value) return false
         return try {
-            com.example.healthsyncandroid.utils.SyncLogManager.log("Started processing payload: ${payload.workouts.size} workouts, ${payload.records.size} generic records.")
+            val workoutCounts = payload.workouts.groupingBy { it.activityType }.eachCount()
+            val recordCountsRaw = payload.records.groupingBy { it.type }.eachCount()
+            com.example.healthsyncandroid.utils.SyncLogManager.log("Started processing payload: ${payload.workouts.size} workouts (Types: $workoutCounts), ${payload.records.size} generic records (Types: $recordCountsRaw).")
             val recordsToInsert = mutableListOf<Record>()
             
             for (workout in payload.workouts) {
@@ -271,7 +310,56 @@ class HealthRepository(private val context: Context) {
                 }
             }
 
+            val bpRecords = payload.records.filter { it.type == "BloodPressureSystolic" || it.type == "BloodPressureDiastolic" }
+            bpRecords.groupBy { it.startTime }.forEach { (time, records) ->
+                val sys = records.find { it.type == "BloodPressureSystolic" }?.value
+                val dia = records.find { it.type == "BloodPressureDiastolic" }?.value
+                if (sys != null && dia != null) {
+                    try {
+                        recordsToInsert.add(
+                            BloodPressureRecord(
+                                time = Instant.ofEpochMilli(time),
+                                zoneOffset = null,
+                                systolic = Pressure.millimetersOfMercury(sys),
+                                diastolic = Pressure.millimetersOfMercury(dia),
+                                metadata = Metadata.unknownRecordingMethodWithId(records.first().uuid)
+                            )
+                        )
+                    } catch (e: Exception) {}
+                }
+            }
+
+            val nutritionRecords = payload.records.filter { it.type == "DietaryCarbs" || it.type == "DietaryProtein" || it.type == "DietaryFat" || it.type == "DietaryEnergy" }
+            nutritionRecords.groupBy { it.startTime }.forEach { (time, records) ->
+                val carbs = records.find { it.type == "DietaryCarbs" }?.value
+                val protein = records.find { it.type == "DietaryProtein" }?.value
+                val fat = records.find { it.type == "DietaryFat" }?.value
+                val energy = records.find { it.type == "DietaryEnergy" }?.value
+                if (carbs != null || protein != null || fat != null || energy != null) {
+                    val start = Instant.ofEpochMilli(time)
+                    val end = Instant.ofEpochMilli(records.first().endTime.coerceAtLeast(time + 1000))
+                    try {
+                        recordsToInsert.add(
+                            NutritionRecord(
+                                startTime = start,
+                                endTime = end,
+                                startZoneOffset = null,
+                                endZoneOffset = null,
+                                totalCarbohydrate = carbs?.let { Mass.grams(it) },
+                                protein = protein?.let { Mass.grams(it) },
+                                totalFat = fat?.let { Mass.grams(it) },
+                                energy = energy?.let { Energy.kilocalories(it) },
+                                metadata = Metadata.unknownRecordingMethodWithId(records.first().uuid)
+                            )
+                        )
+                    } catch (e: Exception) {}
+                }
+            }
+
+            val handledGroupTypes = setOf("BloodPressureSystolic", "BloodPressureDiastolic", "DietaryCarbs", "DietaryProtein", "DietaryFat", "DietaryEnergy", "SleepAnalysis")
+
             for (rec in payload.records) {
+                if (handledGroupTypes.contains(rec.type)) continue
                 val recMeta = Metadata.unknownRecordingMethodWithId(rec.uuid)
                 val start = Instant.ofEpochMilli(rec.startTime)
                 val end = if (rec.endTime > rec.startTime) Instant.ofEpochMilli(rec.endTime) else Instant.ofEpochMilli(rec.startTime + 1000)
@@ -294,8 +382,11 @@ class HealthRepository(private val context: Context) {
                         "ActiveEnergyBurned" -> if (rec.value > 0) recordsToInsert.add(
                             ActiveCaloriesBurnedRecord(energy = Energy.kilocalories(rec.value), startTime = start, endTime = end, startZoneOffset = null, endZoneOffset = null, metadata = recMeta)
                         )
-                        "DistanceWalkingRunning", "DistanceCycling", "DistanceSwimming" -> if (rec.value > 0) recordsToInsert.add(
+                        "DistanceWalkingRunning", "DistanceCycling", "DistanceSwimming", "DistanceWheelchair" -> if (rec.value > 0) recordsToInsert.add(
                             DistanceRecord(distance = Length.meters(rec.value), startTime = start, endTime = end, startZoneOffset = null, endZoneOffset = null, metadata = recMeta)
+                        )
+                        "PushCount" -> if (rec.value > 0) recordsToInsert.add(
+                            WheelchairPushesRecord(count = rec.value.toLong(), startTime = start, endTime = end, startZoneOffset = null, endZoneOffset = null, metadata = recMeta)
                         )
                         "BodyMass" -> {
                             if (rec.value > 0) {
@@ -323,6 +414,68 @@ class HealthRepository(private val context: Context) {
                         "VO2Max" -> if (rec.value > 0) recordsToInsert.add(
                             Vo2MaxRecord(vo2MillilitersPerMinuteKilogram = rec.value, measurementMethod = Vo2MaxRecord.MEASUREMENT_METHOD_OTHER, time = start, zoneOffset = null, metadata = recMeta)
                         )
+                        "BodyFatPercentage" -> if (rec.value > 0) recordsToInsert.add(
+                            BodyFatRecord(percentage = Percentage(rec.value), time = start, zoneOffset = null, metadata = recMeta)
+                        )
+                        "LeanBodyMass" -> if (rec.value > 0) recordsToInsert.add(
+                            LeanBodyMassRecord(mass = Mass.kilograms(rec.value), time = start, zoneOffset = null, metadata = recMeta)
+                        )
+                        "BodyTemperature" -> if (rec.value > 0) recordsToInsert.add(
+                            BodyTemperatureRecord(temperature = Temperature.celsius(rec.value), time = start, zoneOffset = null, metadata = recMeta)
+                        )
+                        "BasalBodyTemperature" -> if (rec.value > 0) recordsToInsert.add(
+                            BasalBodyTemperatureRecord(temperature = Temperature.celsius(rec.value), time = start, zoneOffset = null, metadata = recMeta)
+                        )
+                        "BloodGlucose" -> if (rec.value > 0) recordsToInsert.add(
+                            BloodGlucoseRecord(level = BloodGlucose.milligramsPerDeciliter(rec.value), time = start, zoneOffset = null, metadata = recMeta)
+                        )
+                        "OxygenSaturation" -> if (rec.value > 0) recordsToInsert.add(
+                            OxygenSaturationRecord(percentage = Percentage(rec.value), time = start, zoneOffset = null, metadata = recMeta)
+                        )
+                        "DietaryWater" -> if (rec.value > 0) recordsToInsert.add(
+                            HydrationRecord(volume = Volume.liters(rec.value), startTime = start, endTime = end, startZoneOffset = null, endZoneOffset = null, metadata = recMeta)
+                        )
+                        "MenstruationFlow" -> {
+                            val flow = when (rec.value.toInt()) {
+                                2 -> MenstruationFlowRecord.FLOW_LIGHT
+                                3 -> MenstruationFlowRecord.FLOW_MEDIUM
+                                4 -> MenstruationFlowRecord.FLOW_HEAVY
+                                else -> null
+                            }
+                            if (flow != null) {
+                                recordsToInsert.add(MenstruationFlowRecord(time = start, zoneOffset = null, flow = flow, metadata = recMeta))
+                            }
+                        }
+                        "IntermenstrualBleeding" -> recordsToInsert.add(
+                            IntermenstrualBleedingRecord(time = start, zoneOffset = null, metadata = recMeta)
+                        )
+                        "CervicalMucusQuality" -> {
+                            val appearance = when (rec.value.toInt()) {
+                                1 -> CervicalMucusRecord.APPEARANCE_DRY
+                                2 -> CervicalMucusRecord.APPEARANCE_STICKY
+                                3 -> CervicalMucusRecord.APPEARANCE_CREAMY
+                                4 -> CervicalMucusRecord.APPEARANCE_WATERY
+                                5 -> CervicalMucusRecord.APPEARANCE_EGG_WHITE
+                                else -> null
+                            }
+                            if (appearance != null) {
+                                recordsToInsert.add(CervicalMucusRecord(time = start, zoneOffset = null, appearance = appearance, metadata = recMeta))
+                            }
+                        }
+                        "OvulationTestResult" -> {
+                            val result = when (rec.value.toInt()) {
+                                1 -> OvulationTestRecord.RESULT_NEGATIVE
+                                2 -> OvulationTestRecord.RESULT_POSITIVE
+                                4 -> OvulationTestRecord.RESULT_HIGH // Estrogen surge
+                                else -> null
+                            }
+                            if (result != null) {
+                                recordsToInsert.add(OvulationTestRecord(time = start, zoneOffset = null, result = result, metadata = recMeta))
+                            }
+                        }
+                        "SexualActivity" -> {
+                            recordsToInsert.add(SexualActivityRecord(time = start, zoneOffset = null, metadata = recMeta))
+                        }
                         "FlightsClimbed" -> if (rec.value > 0) recordsToInsert.add(
                             ElevationGainedRecord(elevation = Length.meters(rec.value * 3.0), startTime = start, endTime = end, startZoneOffset = null, endZoneOffset = null, metadata = recMeta)
                         )
@@ -342,11 +495,19 @@ class HealthRepository(private val context: Context) {
             }
             
             if (recordsToInsert.isNotEmpty()) {
-                com.example.healthsyncandroid.utils.SyncLogManager.log("Inserting ${recordsToInsert.size} records into Health Connect in chunks...")
+                val recordCounts = recordsToInsert.groupingBy { it::class.java.simpleName }.eachCount()
+                val countSummary = recordCounts.entries.joinToString { "${it.key}: ${it.value}" }
+                com.example.healthsyncandroid.utils.SyncLogManager.log("Inserting ${recordsToInsert.size} records into Health Connect...\nBreakdown: $countSummary")
                 var successCount = 0
                 var failCount = 0
 
-                recordsToInsert.chunked(3000).forEachIndexed { index, chunk ->
+                val totalRecords = recordsToInsert.size
+                val chunkSize = 3000
+                val logThresholdStep = Math.max(1, totalRecords / 10)
+                var nextLogThreshold = logThresholdStep
+                var processedCount = 0
+
+                recordsToInsert.chunked(chunkSize).forEachIndexed { index, chunk ->
                     try {
                         healthConnectClient.insertRecords(chunk)
                         successCount += chunk.size
@@ -364,6 +525,12 @@ class HealthRepository(private val context: Context) {
                                 }
                             }
                         }
+                    }
+                    processedCount += chunk.size
+                    if (processedCount >= nextLogThreshold || processedCount == totalRecords) {
+                        val percentage = (processedCount * 100) / totalRecords
+                        com.example.healthsyncandroid.utils.SyncLogManager.log("Progress: $processedCount / $totalRecords ($percentage%)")
+                        nextLogThreshold += logThresholdStep
                     }
                 }
                 com.example.healthsyncandroid.utils.SyncLogManager.log("Insertion complete. Success: $successCount, Failed: $failCount.")

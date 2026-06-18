@@ -19,6 +19,7 @@ import io.ktor.server.engine.embeddedServer
 import io.ktor.server.engine.stop
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.response.respond
+import io.ktor.server.response.respondText
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.routing
@@ -74,7 +75,7 @@ class LocalServerService : Service() {
         if (server != null) return
 
         serverJob = serviceScope.launch {
-            server = embeddedServer(CIO, port = 8080) {
+            server = embeddedServer(CIO, port = 8080, host = "0.0.0.0") {
                 install(ContentNegotiation) {
                     json(Json { 
                         ignoreUnknownKeys = true 
@@ -83,7 +84,7 @@ class LocalServerService : Service() {
                 }
                 routing {
                     get("/api/ping") {
-                        call.respond(mapOf("status" to "active"))
+                        call.respondText("{\"status\":\"active\"}", io.ktor.http.ContentType.Application.Json)
                     }
                     post("/api/sync/bulk") {
                         com.example.healthsyncandroid.utils.SyncLogManager.log("Receiving bulk payload from iOS...")

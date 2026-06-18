@@ -6,6 +6,7 @@ import java.net.NetworkInterface
 object NetworkDiagnostics {
     fun getLocalIPv4Address(): String? {
         try {
+            val ips = mutableListOf<String>()
             val interfaces = NetworkInterface.getNetworkInterfaces()
             while (interfaces.hasMoreElements()) {
                 val networkInterface = interfaces.nextElement()
@@ -17,10 +18,11 @@ object NetworkDiagnostics {
                 while (addresses.hasMoreElements()) {
                     val address = addresses.nextElement()
                     if (!address.isLoopbackAddress && address is Inet4Address) {
-                        return address.hostAddress
+                        ips.add("${networkInterface.name}: ${address.hostAddress}")
                     }
                 }
             }
+            return if (ips.isEmpty()) null else ips.joinToString("\n")
         } catch (e: Exception) {
             e.printStackTrace()
         }

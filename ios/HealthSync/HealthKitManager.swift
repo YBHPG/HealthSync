@@ -42,7 +42,27 @@ final class HealthKitManager: ObservableObject, @unchecked Sendable {
             HKQuantityType.quantityType(forIdentifier: .distanceSwimming)!,
             HKQuantityType.quantityType(forIdentifier: .basalEnergyBurned)!,
             HKQuantityType.quantityType(forIdentifier: .runningSpeed)!,
+            HKQuantityType.quantityType(forIdentifier: .bodyFatPercentage)!,
+            HKQuantityType.quantityType(forIdentifier: .leanBodyMass)!,
+            HKQuantityType.quantityType(forIdentifier: .bodyTemperature)!,
+            HKQuantityType.quantityType(forIdentifier: .basalBodyTemperature)!,
+            HKQuantityType.quantityType(forIdentifier: .bloodGlucose)!,
+            HKQuantityType.quantityType(forIdentifier: .oxygenSaturation)!,
+            HKQuantityType.quantityType(forIdentifier: .bloodPressureSystolic)!,
+            HKQuantityType.quantityType(forIdentifier: .bloodPressureDiastolic)!,
+            HKQuantityType.quantityType(forIdentifier: .dietaryWater)!,
+            HKQuantityType.quantityType(forIdentifier: .dietaryCarbohydrates)!,
+            HKQuantityType.quantityType(forIdentifier: .dietaryProtein)!,
+            HKQuantityType.quantityType(forIdentifier: .dietaryFatTotal)!,
+            HKQuantityType.quantityType(forIdentifier: .dietaryEnergyConsumed)!,
+            HKQuantityType.quantityType(forIdentifier: .pushCount)!,
+            HKQuantityType.quantityType(forIdentifier: .distanceWheelchair)!,
             HKCategoryType.categoryType(forIdentifier: .sleepAnalysis)!,
+            HKCategoryType.categoryType(forIdentifier: .menstrualFlow)!,
+            HKCategoryType.categoryType(forIdentifier: .intermenstrualBleeding)!,
+            HKCategoryType.categoryType(forIdentifier: .cervicalMucusQuality)!,
+            HKCategoryType.categoryType(forIdentifier: .ovulationTestResult)!,
+            HKCategoryType.categoryType(forIdentifier: .sexualActivity)!,
             HKObjectType.workoutType()
         ]
         
@@ -124,9 +144,9 @@ final class HealthKitManager: ObservableObject, @unchecked Sendable {
             group.notify(queue: .main) {
                 self.log("Workouts processed. Fetching background metrics...")
                 self.fetchBackgroundMetrics(startDate: startDate, endDate: now) { backgroundRecords in
-                    self.fetchSleepData(startDate: startDate, endDate: now) { sleepRecords in
+                    self.fetchCategoryMetrics(startDate: startDate, endDate: now) { categoryRecords in
                         var allRecords = backgroundRecords
-                        allRecords.append(contentsOf: sleepRecords)
+                        allRecords.append(contentsOf: categoryRecords)
                         
                         let payload = BulkSyncPayload(records: allRecords, workouts: workoutDtos.get())
                         self.log("Finished processing. Total payload contains \(payload.workouts.count) workouts and \(payload.records.count) background records.")
@@ -139,27 +159,61 @@ final class HealthKitManager: ObservableObject, @unchecked Sendable {
         healthStore.execute(workoutQuery)
     }
     
-    private func fetchSleepData(startDate: Date, endDate: Date, completion: @escaping @Sendable ([GenericRecordDto]) -> Void) {
+    private func fetchCategoryMetrics(startDate: Date, endDate: Date, completion: @escaping @Sendable ([GenericRecordDto]) -> Void) {
         let predicate = HKQuery.predicateForSamples(withStart: startDate, end: endDate, options: .strictStartDate)
-        let sleepType = HKCategoryType.categoryType(forIdentifier: .sleepAnalysis)!
         
-        let query = HKSampleQuery(sampleType: sleepType, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: nil) { [weak self] _, samples, _ in
-            var records = [GenericRecordDto]()
-            if let categorySamples = samples as? [HKCategorySample] {
-                self?.log("Fetched \(categorySamples.count) background samples for SleepAnalysis.")
-                for sample in categorySamples {
-                    records.append(GenericRecordDto(
-                        uuid: sample.uuid.uuidString,
-                        type: "SleepAnalysis",
-                        startTime: Int64(sample.startDate.timeIntervalSince1970 * 1000),
-                        endTime: Int64(sample.endDate.timeIntervalSince1970 * 1000),
-                        value: Double(sample.value)
-                    ))
-                }
+        let typesToFetch = [
+            ("SleepAnalysis", HKCategoryType.categoryType(forIdentifier: .sleepAnalysis)!),
+            ("MenstrualFlow", HKCategoryType.categoryType(forIdentifier: .menstrualFlow)!),
+            ("IntermenstrualBleeding", HKCategoryType.categoryType(forIdentifier: .intermenstrualBleeding)!),
+            ("CervicalMucusQuality", HKCategoryType.categoryType(forIdentifier: .cervicalMucusQuality)!),
+            ("OvulationTestResult", HKCategoryType.categoryType(forIdentifier: .ovulationTestResult)!),
+            ("SexualActivity", HKCategoryType.categoryType(forIdentifier: .sexualActivity)!)
+        ]
+        
+        final class ProtectedArray<T>: @unchecked Sendable {
+            private var array: [T] = []
+            private let lock = NSLock()
+            func append(contentsOf elements: [T]) {
+                lock.lock()
+                array.append(contentsOf: elements)
+                lock.unlock()
             }
-            completion(records)
+            func get() -> [T] {
+                lock.lock()
+                defer { lock.unlock() }
+                return array
+            }
         }
-        healthStore.execute(query)
+        
+        let categoryRecords = ProtectedArray<GenericRecordDto>()
+        let group = DispatchGroup()
+        
+        for (typeName, hkType) in typesToFetch {
+            group.enter()
+            let query = HKSampleQuery(sampleType: hkType, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: nil) { [weak self] _, samples, _ in
+                if let categorySamples = samples as? [HKCategorySample], !categorySamples.isEmpty {
+                    self?.log("Fetched \(categorySamples.count) samples for \(typeName).")
+                    var records = [GenericRecordDto]()
+                    for sample in categorySamples {
+                        records.append(GenericRecordDto(
+                            uuid: sample.uuid.uuidString,
+                            type: typeName,
+                            startTime: Int64(sample.startDate.timeIntervalSince1970 * 1000),
+                            endTime: Int64(sample.endDate.timeIntervalSince1970 * 1000),
+                            value: Double(sample.value)
+                        ))
+                    }
+                    categoryRecords.append(contentsOf: records)
+                }
+                group.leave()
+            }
+            healthStore.execute(query)
+        }
+        
+        group.notify(queue: .main) {
+            completion(categoryRecords.get())
+        }
     }
     
     private func fetchBackgroundMetrics(startDate: Date, endDate: Date, completion: @escaping @Sendable ([GenericRecordDto]) -> Void) {
@@ -178,7 +232,22 @@ final class HealthKitManager: ObservableObject, @unchecked Sendable {
             ("FlightsClimbed", HKQuantityType.quantityType(forIdentifier: .flightsClimbed)!),
             ("DistanceCycling", HKQuantityType.quantityType(forIdentifier: .distanceCycling)!),
             ("DistanceSwimming", HKQuantityType.quantityType(forIdentifier: .distanceSwimming)!),
-            ("BasalEnergyBurned", HKQuantityType.quantityType(forIdentifier: .basalEnergyBurned)!)
+            ("BasalEnergyBurned", HKQuantityType.quantityType(forIdentifier: .basalEnergyBurned)!),
+            ("BodyFatPercentage", HKQuantityType.quantityType(forIdentifier: .bodyFatPercentage)!),
+            ("LeanBodyMass", HKQuantityType.quantityType(forIdentifier: .leanBodyMass)!),
+            ("BodyTemperature", HKQuantityType.quantityType(forIdentifier: .bodyTemperature)!),
+            ("BasalBodyTemperature", HKQuantityType.quantityType(forIdentifier: .basalBodyTemperature)!),
+            ("BloodGlucose", HKQuantityType.quantityType(forIdentifier: .bloodGlucose)!),
+            ("OxygenSaturation", HKQuantityType.quantityType(forIdentifier: .oxygenSaturation)!),
+            ("BloodPressureSystolic", HKQuantityType.quantityType(forIdentifier: .bloodPressureSystolic)!),
+            ("BloodPressureDiastolic", HKQuantityType.quantityType(forIdentifier: .bloodPressureDiastolic)!),
+            ("DietaryWater", HKQuantityType.quantityType(forIdentifier: .dietaryWater)!),
+            ("DietaryCarbs", HKQuantityType.quantityType(forIdentifier: .dietaryCarbohydrates)!),
+            ("DietaryProtein", HKQuantityType.quantityType(forIdentifier: .dietaryProtein)!),
+            ("DietaryFat", HKQuantityType.quantityType(forIdentifier: .dietaryFatTotal)!),
+            ("DietaryEnergy", HKQuantityType.quantityType(forIdentifier: .dietaryEnergyConsumed)!),
+            ("PushCount", HKQuantityType.quantityType(forIdentifier: .pushCount)!),
+            ("DistanceWheelchair", HKQuantityType.quantityType(forIdentifier: .distanceWheelchair)!)
         ]
         
         final class ProtectedArray<T>: @unchecked Sendable {
@@ -209,18 +278,30 @@ final class HealthKitManager: ObservableObject, @unchecked Sendable {
                         let value: Double
                         if typeName == "HeartRate" || typeName == "RestingHeartRate" {
                             value = sample.quantity.doubleValue(for: HKUnit(from: "count/min"))
-                        } else if typeName == "StepCount" || typeName == "FlightsClimbed" {
+                        } else if typeName == "StepCount" || typeName == "FlightsClimbed" || typeName == "PushCount" {
                             value = sample.quantity.doubleValue(for: HKUnit.count())
-                        } else if typeName == "ActiveEnergyBurned" || typeName == "BasalEnergyBurned" {
+                        } else if typeName == "ActiveEnergyBurned" || typeName == "BasalEnergyBurned" || typeName == "DietaryEnergy" {
                             value = sample.quantity.doubleValue(for: .kilocalorie())
-                        } else if typeName == "DistanceWalkingRunning" || typeName == "DistanceCycling" || typeName == "DistanceSwimming" || typeName == "Height" {
+                        } else if typeName == "DistanceWalkingRunning" || typeName == "DistanceCycling" || typeName == "DistanceSwimming" || typeName == "DistanceWheelchair" || typeName == "Height" {
                             value = sample.quantity.doubleValue(for: .meter())
-                        } else if typeName == "BodyMass" {
+                        } else if typeName == "BodyMass" || typeName == "LeanBodyMass" {
                             value = sample.quantity.doubleValue(for: .gramUnit(with: .kilo))
+                        } else if typeName == "DietaryCarbs" || typeName == "DietaryProtein" || typeName == "DietaryFat" {
+                            value = sample.quantity.doubleValue(for: .gram())
                         } else if typeName == "RespiratoryRate" {
                             value = sample.quantity.doubleValue(for: HKUnit(from: "count/min"))
                         } else if typeName == "VO2Max" {
                             value = sample.quantity.doubleValue(for: HKUnit(from: "ml/kg*min"))
+                        } else if typeName == "BodyFatPercentage" || typeName == "OxygenSaturation" {
+                            value = sample.quantity.doubleValue(for: .percent())
+                        } else if typeName == "BodyTemperature" || typeName == "BasalBodyTemperature" {
+                            value = sample.quantity.doubleValue(for: .degreeCelsius())
+                        } else if typeName == "BloodGlucose" {
+                            value = sample.quantity.doubleValue(for: HKUnit(from: "mg/dL"))
+                        } else if typeName == "BloodPressureSystolic" || typeName == "BloodPressureDiastolic" {
+                            value = sample.quantity.doubleValue(for: .millimeterOfMercury())
+                        } else if typeName == "DietaryWater" {
+                            value = sample.quantity.doubleValue(for: .liter())
                         } else {
                             value = 0
                         }
