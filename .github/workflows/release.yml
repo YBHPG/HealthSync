@@ -113,6 +113,11 @@ jobs:
           codesign -s - --force --deep build/Build/Products/Release-iphoneos/HealthSync.app
           mkdir Payload
           cp -r build/Build/Products/Release-iphoneos/HealthSync.app Payload/
+          
+          # AltStore does NOT support sideloading Watch apps and will crash trying to resign it.
+          # We must strip the Watch app from the IPA meant for sideloading.
+          rm -rf Payload/HealthSync.app/Watch
+          
           zip -r HealthSync-iOS-v${VERSION}.ipa Payload
 
       - name: Upload IPA to Release
