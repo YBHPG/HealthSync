@@ -124,3 +124,21 @@ jobs:
           files: ios/HealthSync-iOS-v*.ipa
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update AltSource JSON
+        run: |
+          size=$(stat -f%z ios/HealthSync-iOS-v${VERSION}.ipa)
+          date=$(date -u +"%Y-%m-%d")
+          
+          # Create a JSON object for the new version
+          version_obj="{\"version\":\"$VERSION\",\"buildVersion\":\"$VERSION_CODE\",\"date\":\"$date\",\"downloadURL\":\"https://github.com/${{ github.repository }}/releases/download/v$VERSION/HealthSync-iOS-v${VERSION}.ipa\",\"size\":$size,\"minOSVersion\":\"15.0\"}"
+          
+          # Use jq to prepend the new version to the versions array
+          jq ".apps[0].versions |= [$version_obj] + ." altsource.json > tmp.json && mv tmp.json altsource.json
+          
+          # Commit and push back to master branch
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add altsource.json
+          git commit -m "chore: update AltSource JSON for release v$VERSION"
+          git push origin HEAD:master

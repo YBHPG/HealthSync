@@ -1,0 +1,24 @@
+{
+  "name": "HealthSync Releases",
+  "identifier": "com.bulbadyshka.healthsync.source",
+  "apps": [
+    {
+      "name": "HealthSync",
+      "bundleIdentifier": "com.bulbadyshka.HealthSync",
+      "developerName": "bulbadyshka",
+      "localizedDescription": "HealthSync securely synchronizes your health data between Apple Health and your Android devices.",
+      "versions": [],
+      "appPermissions": {
+        "entitlements": [
+          "com.apple.developer.healthkit",
+          "com.apple.developer.healthkit.background-delivery"
+        ],
+        "privacy": {
+          "NSHealthShareUsageDescription": "We need access to your health data to sync it to your Android device.",
+          "NSHealthUpdateUsageDescription": "We need access to your health data to sync it.",
+          "NSLocalNetworkUsageDescription": "We need access to the local network to find the Android synchronization server."
+        }
+      }
+    }
+  ]
+}
